@@ -13,6 +13,7 @@ from odoo.tests import new_test_user
 
 from unittest.mock import patch
 
+from odoo import release
 from odoo.addons import __path__ as __addons_path__
 from odoo.tools import mute_logger
 
@@ -42,7 +43,7 @@ class TestImportModule(odoo.tests.TransactionCase):
                 b'"id","name"\n' \
                 b'bar,bar'
             ),
-            ('foo/data.sql', b"INSERT INTO res_partner (active, name) VALUES (true, 'baz');"),
+            ('foo/data.sql', b"INSERT INTO res_currency (name, symbol, active) VALUES ('New Currency', 'NCU', TRUE);"),
             ('foo/static/css/style.css', b".foo{color: black;}"),
             ('foo/static/js/foo.js', b"console.log('foo')"),
             ('bar/__manifest__.py', b"{'data': ['data.xml']}"),
@@ -60,7 +61,7 @@ class TestImportModule(odoo.tests.TransactionCase):
         self.assertEqual(self.env.ref('foo.foo').name, 'foo')
         self.assertEqual(self.env.ref('foo.bar')._name, 'res.partner')
         self.assertEqual(self.env.ref('foo.bar').name, 'bar')
-        self.assertEqual(self.env['res.partner'].search_count([('name', '=', 'baz')]), 1)
+        self.assertEqual(self.env['res.currency'].search_count([('symbol', '=', 'NCU')]), 1)
 
         self.assertEqual(self.env.ref('bar.foo')._name, 'res.country')
         self.assertEqual(self.env.ref('bar.foo').name, 'foo')
@@ -179,6 +180,8 @@ class TestImportModule(odoo.tests.TransactionCase):
                 ]
             },
             'license': 'LGPL-3',
+            'category': 'Test Category',
+            'depends': ['base'],
         })
 
         stream = BytesIO()
@@ -203,6 +206,10 @@ class TestImportModule(odoo.tests.TransactionCase):
         asset_data = self.env['ir.model.data'].search([('model', '=', 'ir.asset'), ('res_id', '=', asset.id)])
         self.assertEqual(asset_data.module, 'test_module')
         self.assertEqual(asset_data.name, f'{bundle}_{path}'.replace(".", "_"))
+
+        module = self.env['ir.module.module'].search([('name', '=', 'test_module')])
+        self.assertEqual(module.dependencies_id.mapped('name'), ['base'])
+        self.assertEqual(module.category_id.name, 'Test Category')
 
         # Uninstall test module
         self.env['ir.module.module'].search([('name', '=', 'test_module')]).module_uninstall()
@@ -233,6 +240,7 @@ class TestImportModule(odoo.tests.TransactionCase):
                 ]
             },
             'license': 'LGPL-3',
+            'version': '1.0',
         })
         stream = BytesIO()
         with ZipFile(stream, 'w') as archive:
@@ -256,6 +264,9 @@ class TestImportModule(odoo.tests.TransactionCase):
         asset_data = self.env['ir.model.data'].search([('model', '=', 'ir.asset'), ('res_id', '=', asset.id)])
         self.assertEqual(asset_data.module, 'test_module')
         self.assertEqual(asset_data.name, f'{bundle}_/{path}'.replace(".", "_"))
+
+        module = self.env['ir.module.module'].search([('name', '=', 'test_module')])
+        self.assertEqual(module.latest_version, f'{release.series}.1.0')
 
         # Update test module
         stream = BytesIO()
@@ -337,3 +348,20 @@ class TestImportModuleHttp(TestImportModule, odoo.tests.HttpCase):
         self.assertEqual(asset.path, asset_path)
         asset_data = files[1][1]
         self.assertEqual(self.url_open(asset_path).content, asset_data)
+
+    def test_check_zip_dependencies(self):
+        files = [
+            ('foo/__manifest__.py', b"{'data': ['data.xml']}")
+        ]
+        archive = BytesIO()
+        with ZipFile(archive, 'w') as zipf:
+            for path, data in files:
+                zipf.writestr(path, data)
+        modules_dependencies, _not_found = self.env['ir.module.module']._get_missing_dependencies(archive.getvalue())
+        import_module = self.env['base.import.module'].create({
+                'module_file': base64.b64encode(archive.getvalue()),
+                'state': 'init',
+                'modules_dependencies': modules_dependencies,
+            })
+        dependencies_names = import_module.get_dependencies_to_install_names()
+        self.assertEqual(dependencies_names, [])

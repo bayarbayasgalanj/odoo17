@@ -923,6 +923,7 @@ class TestStockValuationChangeCostMethod(TestStockValuationCommon):
         self.assertEqual(self.product1.quantity_svl, 19)
 
 
+@tagged('post_install', '-at_install', 'change_valuation')
 class TestStockValuationChangeValuation(TestStockValuationCommon):
     @classmethod
     def setUpClass(cls):

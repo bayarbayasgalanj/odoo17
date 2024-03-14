@@ -378,15 +378,21 @@ QUnit.module("Fields", (hooks) => {
                 arch: `
                     <form>
                         <sheet>
-                            <field name="trululu"/>
+                            <field name="int_field" />
+                            <field name="trululu" context="{'blip': int_field, 'blop': 3}"/>
                         </sheet>
                     </form>`,
-                mockRPC(route, { method }) {
+                mockRPC(route, { args, method, model, kwargs }) {
                     if (method === "get_formview_id") {
                         return Promise.resolve(false);
                     }
                     if (method === "web_save") {
                         assert.step("web_save");
+                    }
+                    if (method === "read" && model === "partner" && args[0][0] === 4) {
+                        assert.step(`read partner: ${args[1]}`);
+                        assert.strictEqual(kwargs.context.blip, 10);
+                        assert.strictEqual(kwargs.context.blop, 3);
                     }
                 },
             });
@@ -402,7 +408,7 @@ QUnit.module("Fields", (hooks) => {
 
             // save and close modal
             await clickSave(target.querySelectorAll(".modal")[1]);
-            assert.verifySteps(["web_save"]);
+            assert.verifySteps(["web_save", "read partner: display_name"]);
             // save form
             await clickSave(target);
             assert.verifySteps([]);
@@ -1111,14 +1117,45 @@ QUnit.module("Fields", (hooks) => {
         assert.containsOnce(
             target.querySelector(".o_field_many2one[name='trululu'] .dropdown-menu"),
             "li.o_m2o_start_typing",
-            "autocomplete should contains start typing option"
+            "autocomplete should contain start typing option"
         );
 
         await click(target, ".o_field_many2one[name='product_id'] input");
         assert.containsNone(
             target.querySelector(".o_field_many2one[name='product_id'] .dropdown-menu"),
             "li.o_m2o_start_typing",
-            "autocomplete should contains start typing option"
+            "autocomplete should not contain start typing option"
+        );
+    });
+
+    QUnit.test("many2one with no_create_edit and no_quick_create options should show no records when no result match", async function (assert) {
+        assert.expect(2);
+
+        await makeView({
+            type: "form",
+            resModel: "partner",
+            serverData,
+            arch: `
+                <form>
+                    <sheet>
+                        <group>
+                            <field name="product_id" options="{'no_create_edit': 1, 'no_quick_create': 1}" />
+                        </group>
+                    </sheet>
+                </form>`,
+        });
+
+        await click(target, ".o_field_many2one[name='product_id'] input");
+        assert.containsNone(
+            target.querySelector(".o_field_many2one[name='product_id'] .dropdown-menu"),
+            "li.o_m2o_no_result",
+            "autocomplete should not contain the no records option"
+        );
+        await editInput(target, ".o_field_many2one[name='product_id'] input", "aze");
+        assert.containsOnce(
+            target.querySelector(".o_field_many2one[name='product_id'] .dropdown-menu"),
+            "li.o_m2o_no_result",
+            "autocomplete should contain the no records option"
         );
     });
 
@@ -3202,6 +3239,31 @@ QUnit.module("Fields", (hooks) => {
         );
     });
 
+    QUnit.test("no_quick_create option on a many2one when can_create is absent", async function (assert) {
+        serverData.models.partner.fields.product_id.readonly = true;
+        await makeView({
+            type: "form",
+            resModel: "partner",
+            serverData,
+            arch: `
+                <form>
+                    <sheet>
+                        <field name="product_id" options="{'no_quick_create': 1}" readonly="0" />
+                    </sheet>
+                </form>`,
+        });
+        await editInput(target, ".o_field_many2one input", "new partner");
+        assert.containsOnce(
+            target,
+            ".ui-autocomplete .o_m2o_dropdown_option",
+            "Dropdown should be opened and have only one item"
+        );
+        assert.hasClass(
+            target.querySelector(".ui-autocomplete .o_m2o_dropdown_option"),
+            "o_m2o_dropdown_option_create_edit"
+        );
+    });
+
     QUnit.test("can_create and can_write option on a many2one", async function (assert) {
         serverData.models.product.options = {
             can_create: "false",
@@ -4572,21 +4634,16 @@ QUnit.module("Fields", (hooks) => {
                 </form>`,
             mockRPC(route, { method, kwargs }) {
                 if (method === "name_search") {
-                    return Promise.resolve([
-                        [1, false]
-                    ]);
+                    return Promise.resolve([[1, false]]);
                 }
             },
         });
 
         const input = target.querySelector(".o_field_many2one input");
         await click(input);
-        
+
         await triggerEvents(input, null, ["input", "change"]);
-        let dropdown = target.querySelector(".o_field_many2one[name='trululu'] .dropdown-menu")
-        assert.strictEqual(
-            dropdown.querySelector("a.dropdown-item").text,
-            "Unnamed"
-        );
+        const dropdown = target.querySelector(".o_field_many2one[name='trululu'] .dropdown-menu");
+        assert.strictEqual(dropdown.querySelector("a.dropdown-item").text, "Unnamed");
     });
 });

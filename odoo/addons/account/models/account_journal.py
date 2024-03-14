@@ -207,6 +207,7 @@ class AccountJournal(models.Model):
     selected_payment_method_codes = fields.Char(
         compute='_compute_selected_payment_method_codes',
     )
+    accounting_date = fields.Date(compute='_compute_accounting_date')
 
     _sql_constraints = [
         ('code_company_uniq', 'unique (company_id, code)', 'Journal codes must be unique per company.'),
@@ -272,9 +273,9 @@ class AccountJournal(models.Model):
                                                - pay_methods_by_journal.get(journal._origin.id, set())
 
                     if payment_type == 'inbound':
-                        lines = journal.inbound_payment_method_line_ids
+                        lines = journal._origin.inbound_payment_method_line_ids
                     else:
-                        lines = journal.outbound_payment_method_line_ids
+                        lines = journal._origin.outbound_payment_method_line_ids
 
                     already_used = payment_method in lines.payment_method_id
                     is_protected = payment_method.id in protected_pay_method_ids
@@ -354,6 +355,16 @@ class AccountJournal(models.Model):
                 journal.suspense_account_id = journal.company_id.account_journal_suspense_account_id
             else:
                 journal.suspense_account_id = False
+
+    @api.depends('company_id')
+    @api.depends_context('move_date', 'has_tax')
+    def _compute_accounting_date(self):
+        move_date = self.env.context.get('move_date') or fields.Date.context_today(self)
+        has_tax = self.env.context.get('has_tax') or False
+        for journal in self:
+            temp_move = self.env['account.move'].new({'journal_id': journal.id})
+            journal.accounting_date = temp_move._get_accounting_date(move_date, has_tax)
+
 
     @api.onchange('type')
     def _onchange_type_for_alias(self):
@@ -694,6 +705,10 @@ class AccountJournal(models.Model):
             # Create the bank_account_id if necessary
             if journal.type == 'bank' and not journal.bank_account_id and vals.get('bank_acc_number'):
                 journal.set_bank_account(vals.get('bank_acc_number'), vals.get('bank_id'))
+
+            # Create the secure_sequence_id if necessary
+            if journal.restrict_mode_hash_table and not journal.secure_sequence_id:
+                journal._create_secure_sequence(['secure_sequence_id'])
 
         return journals
 

@@ -12,7 +12,7 @@ import {
     pasteHtml,
     pasteOdooEditorHtml,
 } from "../utils.js";
-import {CLIPBOARD_WHITELISTS} from "../../src/OdooEditor.js";
+import { CLIPBOARD_WHITELISTS, setSelection } from "../../src/OdooEditor.js";
 
 describe('Copy', () => {
     describe('range collapsed', async () => {
@@ -46,8 +46,8 @@ describe('Copy', () => {
                     const clipboardData = new DataTransfer();
                     await triggerEvent(editor.editable, 'copy', { clipboardData });
                     window.chai.expect(clipboardData.getData('text/plain')).to.be.equal('bcd');
-                    window.chai.expect(clipboardData.getData('text/html')).to.be.equal('bcd');
-                    window.chai.expect(clipboardData.getData('text/odoo-editor')).to.be.equal('bcd');
+                    window.chai.expect(clipboardData.getData('text/html')).to.be.equal('<p>bcd</p>');
+                    window.chai.expect(clipboardData.getData('text/odoo-editor')).to.be.equal('<p>bcd</p>');
                 },
             });
             await testEditor(BasicEditor, {
@@ -56,8 +56,8 @@ describe('Copy', () => {
                     const clipboardData = new DataTransfer();
                     await triggerEvent(editor.editable, 'copy', { clipboardData });
                     window.chai.expect(clipboardData.getData('text/plain')).to.be.equal('abc\nefg');
-                    window.chai.expect(clipboardData.getData('text/html')).to.be.equal('abc<br>efg');
-                    window.chai.expect(clipboardData.getData('text/odoo-editor')).to.be.equal('abc<br>efg');
+                    window.chai.expect(clipboardData.getData('text/html')).to.be.equal('<p>abc<br>efg</p>');
+                    window.chai.expect(clipboardData.getData('text/odoo-editor')).to.be.equal('<p>abc<br>efg</p>');
                 },
             });
             await testEditor(BasicEditor, {
@@ -68,6 +68,72 @@ describe('Copy', () => {
                     window.chai.expect(clipboardData.getData('text/plain')).to.be.equal('a');
                     window.chai.expect(clipboardData.getData('text/html')).to.be.equal('<table><tbody><tr><td><ul><li>a</li><li>b</li><li>c</li></ul></td><td><br></td></tr></tbody></table>');
                     window.chai.expect(clipboardData.getData('text/odoo-editor')).to.be.equal('<table><tbody><tr><td><ul><li>a</li><li>b</li><li>c</li></ul></td><td><br></td></tr></tbody></table>');
+                },
+            });
+        });
+        it('should wrap the selected text with clones of ancestors up to a block element to keep styles', async () => {
+            await testEditor(BasicEditor, {
+                contentBefore: '<p>[<span style="font-size: 16px;">Test</span> <span style="font-size: 48px;"><font style="color: rgb(255, 0, 0);">Test</font></span>]</p>',
+                stepFunction: async editor => {
+                    const clipboardData = new DataTransfer();
+                    triggerEvent(editor.editable, 'copy', { clipboardData });
+                    window.chai.expect(clipboardData.getData('text/plain')).to.be.equal('Test Test');
+                    window.chai.expect(clipboardData.getData('text/html')).to.be.equal('<p><span style="font-size: 16px;">Test</span> <span style="font-size: 48px;"><font style="color: rgb(255, 0, 0);">Test</font></span></p>');
+                    window.chai.expect(clipboardData.getData('text/odoo-editor')).to.be.equal('<p><span style="font-size: 16px;">Test</span> <span style="font-size: 48px;"><font style="color: rgb(255, 0, 0);">Test</font></span></p>');
+                },
+            });
+            await testEditor(BasicEditor, {
+                contentBefore: '<p><strong><em><u><font class="text-o-color-1">hello [there]</font></u></em></strong></p>',
+                stepFunction: async editor => {
+                    const clipboardData = new DataTransfer();
+                    triggerEvent(editor.editable, 'copy', { clipboardData });
+                    window.chai.expect(clipboardData.getData('text/plain')).to.be.equal('there');
+                    window.chai.expect(clipboardData.getData('text/html')).to.be.equal('<p><strong><em><u><font class="text-o-color-1">there</font></u></em></strong></p>');
+                    window.chai.expect(clipboardData.getData('text/odoo-editor')).to.be.equal('<p><strong><em><u><font class="text-o-color-1">there</font></u></em></strong></p>');
+                },
+            });
+        });
+        it('should copy the selection as a single list item', async () => {
+            await testEditor(BasicEditor, {
+                contentBefore: '<ul><li>[First]</li><li>Second</li>',
+                stepFunction: async editor => {
+                    const clipboardData = new DataTransfer();
+                    triggerEvent(editor.editable, 'copy', { clipboardData });
+                    window.chai.expect(clipboardData.getData('text/plain')).to.be.equal('First');
+                    window.chai.expect(clipboardData.getData('text/html')).to.be.equal('<li>First</li>');
+                    window.chai.expect(clipboardData.getData('text/odoo-editor')).to.be.equal('<li>First</li>');
+                },
+            });
+            await testEditor(BasicEditor, {
+                contentBefore: '<ul><li>First [List]</li><li>Second</li>',
+                stepFunction: async editor => {
+                    const clipboardData = new DataTransfer();
+                    triggerEvent(editor.editable, 'copy', { clipboardData });
+                    window.chai.expect(clipboardData.getData('text/plain')).to.be.equal('List');
+                    window.chai.expect(clipboardData.getData('text/html')).to.be.equal('<li>List</li>');
+                    window.chai.expect(clipboardData.getData('text/odoo-editor')).to.be.equal('<li>List</li>');
+                },
+            });
+            await testEditor(BasicEditor, {
+                contentBefore: '<ul><li><span style="font-size: 48px;"><font style="color: rgb(255, 0, 0);">[First]</font></span></li><li>Second</li>',
+                stepFunction: async editor => {
+                    const clipboardData = new DataTransfer();
+                    triggerEvent(editor.editable, 'copy', { clipboardData });
+                    window.chai.expect(clipboardData.getData('text/plain')).to.be.equal('First');
+                    window.chai.expect(clipboardData.getData('text/html')).to.be.equal('<li><span style="font-size: 48px;"><font style="color: rgb(255, 0, 0);">First</font></span></li>');
+                    window.chai.expect(clipboardData.getData('text/odoo-editor')).to.be.equal('<li><span style="font-size: 48px;"><font style="color: rgb(255, 0, 0);">First</font></span></li>');
+                },
+            });
+        })
+        it('should copy the selection as a list with multiple list items', async () => {
+            await testEditor(BasicEditor, {
+                contentBefore: '<ul><li>[First</li><li>Second]</li>',
+                stepFunction: async editor => {
+                    const clipboardData = new DataTransfer();
+                    triggerEvent(editor.editable, 'copy', { clipboardData });
+                    window.chai.expect(clipboardData.getData('text/plain')).to.be.equal('First\nSecond');
+                    window.chai.expect(clipboardData.getData('text/html')).to.be.equal('<ul><li>First</li><li>Second</li></ul>');
+                    window.chai.expect(clipboardData.getData('text/odoo-editor')).to.be.equal('<ul><li>First</li><li>Second</li></ul>');
                 },
             });
         });
@@ -105,8 +171,8 @@ describe('Cut', () => {
                     const clipboardData = new DataTransfer();
                     await triggerEvent(editor.editable, 'cut', { clipboardData });
                     window.chai.expect(clipboardData.getData('text/plain')).to.be.equal('bcd');
-                    window.chai.expect(clipboardData.getData('text/html')).to.be.equal('bcd');
-                    window.chai.expect(clipboardData.getData('text/odoo-editor')).to.be.equal('bcd');
+                    window.chai.expect(clipboardData.getData('text/html')).to.be.equal('<p>bcd</p>');
+                    window.chai.expect(clipboardData.getData('text/odoo-editor')).to.be.equal('<p>bcd</p>');
                 },
                 contentAfter: '<p>a[]e</p>',
             });
@@ -116,8 +182,8 @@ describe('Cut', () => {
                     const clipboardData = new DataTransfer();
                     await triggerEvent(editor.editable, 'cut', { clipboardData });
                     window.chai.expect(clipboardData.getData('text/plain')).to.be.equal('abc\nefg');
-                    window.chai.expect(clipboardData.getData('text/html')).to.be.equal('abc<br>efg');
-                    window.chai.expect(clipboardData.getData('text/odoo-editor')).to.be.equal('abc<br>efg');
+                    window.chai.expect(clipboardData.getData('text/html')).to.be.equal('<p>abc<br>efg</p>');
+                    window.chai.expect(clipboardData.getData('text/odoo-editor')).to.be.equal('<p>abc<br>efg</p>');
                 },
                 contentAfter: '<p>[]<br></p>',
             });
@@ -338,6 +404,24 @@ describe('Paste', () => {
                                   '<p style="margin-bottom: 0px;">b</p>' +
                                   '<p style="margin-bottom: 0px;">c</p>' +
                                   '<p>d[]<br></p>',
+                });
+            });
+            it('should paste text and understand \\n newlines within UNBREAKABLE node', async () => {
+                await testEditor(BasicEditor, {
+                    contentBefore: '<div>[]<br></div>',
+                    stepFunction: async editor => {
+                        await pasteText(editor, 'a\nb\nc\nd');
+                    },
+                    contentAfter: '<div>a<br>b<br>c<br>d[]<br></div>',
+                });
+            });
+            it('should paste text and understand \\n newlines within UNBREAKABLE node(2)', async () => {
+                await testEditor(BasicEditor, {
+                    contentBefore: '<div><span style="font-size: 9px;">a[]</span></div>',
+                    stepFunction: async editor => {
+                        await pasteText(editor, 'b\nc\nd');
+                    },
+                    contentAfter: '<div><span style="font-size: 9px;">ab<br>c<br>d[]<br></span></div>',
                 });
             });
         });
@@ -2151,6 +2235,35 @@ describe('Paste', () => {
                 },
                 contentAfter: '<p>a[]b</p>',
             });
+        });
+    });
+    describe('editable in iframe', () => {
+        it('should paste odoo-editor html', async () => {
+            // Setup
+            const testContainer = document.querySelector('#editor-test-container');
+            const iframe = document.createElement('iframe');
+            testContainer.append(iframe);
+            const iframeDocument = iframe.contentDocument;
+            const editable = iframeDocument.createElement('div');
+            iframeDocument.body.append(editable);
+            const editor = new BasicEditor(editable, { document: iframeDocument });
+
+            // Action: paste
+            setSelection(editable.querySelector('p'), 0);
+            const clipboardData = new DataTransfer();
+            clipboardData.setData('text/odoo-editor', '<p>text<b>bold text</b>more text</p>');
+            await triggerEvent(editor.editable, 'paste', { clipboardData });
+
+            // Clean-up
+            editor.clean();
+            editor.destroy();
+            iframe.remove();
+
+            // Assertion
+            window.chai.expect(editable.innerHTML).to.be.equal(
+                '<p>text<b>bold text</b>more text<br></p>',
+                'should paste content in the paragraph'
+            );
         });
     });
 });

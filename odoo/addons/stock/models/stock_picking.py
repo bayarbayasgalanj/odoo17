@@ -24,17 +24,12 @@ class PickingType(models.Model):
     _rec_names_search = ['name', 'warehouse_id.name']
     _check_company_auto = True
 
-    def _default_show_operations(self):
-        return self.user_has_groups('stock.group_production_lot,'
-                                    'stock.group_stock_multi_locations,'
-                                    'stock.group_tracking_lot')
-
     name = fields.Char('Operation Type', required=True, translate=True)
     color = fields.Integer('Color')
     sequence = fields.Integer('Sequence', help="Used to order the 'All Operations' kanban view")
     sequence_id = fields.Many2one(
         'ir.sequence', 'Reference Sequence',
-        check_company=True, copy=True)
+        check_company=True, copy=False)
     sequence_code = fields.Char('Sequence Prefix', required=True)
     default_location_src_id = fields.Many2one(
         'stock.location', 'Default Source Location', compute='_compute_default_location_src_id',
@@ -67,8 +62,9 @@ class PickingType(models.Model):
     print_label = fields.Boolean(
         'Print Label',
         help="If this checkbox is ticked, label will be print in this operation.")
+    # TODO: delete this field `show_operations`
     show_operations = fields.Boolean(
-        'Show Detailed Operations', default=_default_show_operations,
+        'Show Detailed Operations', default=False,
         help="If this checkbox is ticked, the pickings lines will represent detailed stock operations. If not, the picking lines will represent an aggregate of detailed stock operations.")
     show_reserved = fields.Boolean(
         'Pre-fill Detailed Operations', default=True,
@@ -175,6 +171,8 @@ class PickingType(models.Model):
         default = dict(default or {})
         if 'name' not in default:
             default['name'] = _("%s (copy)", self.name)
+        if 'sequence_code' not in default and 'sequence_id' not in default:
+            default.update(sequence_code=_("%s (copy)") % self.sequence_code)
         return super().copy(default=default)
 
     def write(self, vals):
@@ -276,15 +274,6 @@ class PickingType(models.Model):
             elif picking_type.code == 'outgoing':
                 picking_type.print_label = True
 
-    @api.depends('code')
-    def _compute_show_operations(self):
-        for picking_type in self:
-            picking_type.show_operations = picking_type.code != 'incoming' and picking_type.user_has_groups(
-                'stock.group_production_lot,'
-                'stock.group_stock_multi_locations,'
-                'stock.group_tracking_lot'
-            )
-
     @api.onchange('code')
     def _onchange_picking_code(self):
         if self.code == 'internal' and not self.user_has_groups('stock.group_stock_multi_locations'):
@@ -305,11 +294,28 @@ class PickingType(models.Model):
             else:
                 picking_type.warehouse_id = False
 
-    @api.depends('show_operations', 'code')
+    @api.depends('code')
     def _compute_show_reserved(self):
         for picking_type in self:
-            if picking_type.show_operations and picking_type.code != 'incoming':
+            if picking_type.code != 'incoming':
                 picking_type.show_reserved = True
+
+    @api.onchange('sequence_code')
+    def _onchange_sequence_code(self):
+        if not self.sequence_code:
+            return
+        domain = [('sequence_code', '=', self.sequence_code), '|', ('company_id', '=', self.company_id.id), ('company_id', '=', False)]
+        if self._origin.id:
+            domain += [('id', '!=', self._origin.id)]
+        picking_type = self.env['stock.picking.type'].search(domain, limit=1)
+        if picking_type and picking_type.sequence_id != self.sequence_id:
+            return {
+                'warning': {
+                    'message': _(
+                        "This sequence prefix is already being used by another operation type. It is recommended that you select a unique prefix "
+                        "to avoid issues and/or repeated reference values or assign the existing reference sequence to this operation type.")
+                }
+            }
 
     @api.constrains('default_location_dest_id')
     def _check_default_location(self):
@@ -356,16 +362,6 @@ class PickingType(models.Model):
         for record in self:
             record.show_picking_type = record.code in ['incoming', 'outgoing', 'internal']
 
-    @api.constrains('sequence_id')
-    def _check_sequence_code(self):
-        domain = expression.OR([[('company_id', '=', record.company_id.id), ('name', '=', record.sequence_id.name)]
-                                for record in self])
-        duplicate_records = self.env['ir.sequence']._read_group(
-            domain, ['company_id', 'name'], having=[('__count', '>', 1)])
-        if duplicate_records:
-            duplicate_names = [name for __, name in duplicate_records]
-            raise UserError(_("Sequences %s already exist.",
-                            ', '.join(duplicate_names)))
 
 class Picking(models.Model):
     _name = "stock.picking"
@@ -503,8 +499,8 @@ class Picking(models.Model):
     # Used to search on pickings
     product_id = fields.Many2one('product.product', 'Product', related='move_ids.product_id', readonly=True)
     lot_id = fields.Many2one('stock.lot', 'Lot/Serial Number', related='move_line_ids.lot_id', readonly=True)
-
-    show_operations = fields.Boolean(compute='_compute_show_operations')
+    # TODO: delete this field `show_operations`
+    show_operations = fields.Boolean(related='picking_type_id.show_operations')
     show_reserved = fields.Boolean(related='picking_type_id.show_reserved')
     show_lots_text = fields.Boolean(compute='_compute_show_lots_text')
     has_tracking = fields.Boolean(compute='_compute_has_tracking')
@@ -583,20 +579,6 @@ class Picking(models.Model):
                 if forecast_date:
                     picking.products_availability = _('Exp %s', format_date(self.env, forecast_date))
                     picking.products_availability_state = 'late' if picking.scheduled_date and picking.scheduled_date < forecast_date else 'expected'
-
-    @api.depends('picking_type_id.show_operations')
-    def _compute_show_operations(self):
-        for picking in self:
-            if self.env.context.get('force_detailed_view'):
-                picking.show_operations = True
-                continue
-            if picking.picking_type_id.show_operations:
-                if (picking.state == 'draft') or picking.state != 'draft':
-                    picking.show_operations = True
-                else:
-                    picking.show_operations = False
-            else:
-                picking.show_operations = False
 
     @api.depends('move_line_ids', 'picking_type_id.use_create_lots', 'picking_type_id.use_existing_lots', 'state')
     def _compute_show_lots_text(self):
@@ -952,6 +934,25 @@ class Picking(models.Model):
         self.filtered(lambda x: not x.move_ids).state = 'cancel'
         return True
 
+    def action_detailed_operations(self):
+        view_id = self.env.ref('stock.view_stock_move_line_detailed_operation_tree').id
+        return {
+            'name': _('Detailed Operations'),
+            'view_mode': 'tree',
+            'type': 'ir.actions.act_window',
+            'res_model': 'stock.move.line',
+            'views': [(view_id, 'tree')],
+            'domain': [('id', 'in', self.move_line_ids.ids)],
+            'context': {
+                'default_picking_id': self.id,
+                'default_location_id': self.location_id.id,
+                'default_location_dest_id': self.location_dest_id.id,
+                'default_company_id': self.company_id.id,
+                'show_lots_text': self.show_lots_text,
+                'picking_code': self.picking_type_code,
+            }
+        }
+
     def _action_done(self):
         """Call `_action_done` on the `stock.move` of the `stock.picking` in `self`.
         This method makes sure every `stock.move.line` is linked to a `stock.move` by either
@@ -1172,7 +1173,16 @@ class Picking(models.Model):
 
     def _pre_action_done_hook(self):
         for picking in self:
-            if all(not move.picked for move in picking.move_ids):
+            has_quantity = False
+            has_pick = False
+            for move in picking.move_ids:
+                if move.picked:
+                    has_pick = True
+                if move.quantity:
+                    has_quantity = True
+                if has_quantity and has_pick:
+                    break
+            if has_quantity and not has_pick:
                 picking.move_ids.picked = True
         if not self.env.context.get('skip_backorder'):
             pickings_to_backorder = self._check_backorder()
@@ -1260,14 +1270,13 @@ class Picking(models.Model):
                     'move_line_ids': [],
                     'backorder_id': picking.id
                 })
+                moves_to_backorder.write({'picking_id': backorder_picking.id, 'picked': False})
+                moves_to_backorder.move_line_ids.package_level_id.write({'picking_id': backorder_picking.id})
+                moves_to_backorder.mapped('move_line_ids').write({'picking_id': backorder_picking.id})
+                backorders |= backorder_picking
                 picking.message_post(
                     body=_('The backorder %s has been created.', backorder_picking._get_html_link())
                 )
-                moves_to_backorder.write({'picking_id': backorder_picking.id})
-                moves_to_backorder.move_line_ids.package_level_id.write({'picking_id': backorder_picking.id})
-                # moves_to_backorder._do_unreserve()
-                moves_to_backorder.mapped('move_line_ids').write({'picking_id': backorder_picking.id})
-                backorders |= backorder_picking
                 if backorder_picking.picking_type_id.reservation_method == 'at_confirm':
                     bo_to_assign |= backorder_picking
         if bo_to_assign:
@@ -1365,7 +1374,7 @@ class Picking(models.Model):
         """
         for (parent, responsible), rendering_context in documents.items():
             note = render_method(rendering_context)
-            parent.activity_schedule(
+            parent.sudo().activity_schedule(
                 'mail.mail_activity_data_warning',
                 date.today(),
                 note=note,
@@ -1490,7 +1499,11 @@ class Picking(models.Model):
                 return action
         return package_id
 
-    def _package_move_lines(self):
+    def _package_move_lines(self, batch_pack=False):
+        # in theory, the picking_type should always be the same (i.e. for batch transfers),
+        # but customizations may bypass it and cause unexpected behavior so we avoid allowing those situations
+        if len(self.picking_type_id) > 1:
+            raise UserError(_("You cannot pack products into the same package when they are from different transfers with different operation types."))
         quantity_move_line_ids = self.move_line_ids.filtered(
             lambda ml:
                 float_compare(ml.quantity, 0.0, precision_rounding=ml.product_uom_id.rounding) > 0 and

@@ -50,6 +50,7 @@ class ir_cron(models.Model):
     _name = "ir.cron"
     _order = 'cron_name'
     _description = 'Scheduled Actions'
+    _allow_sudo_commands = False
 
     ir_actions_server_id = fields.Many2one(
         'ir.actions.server', 'Server action',
@@ -92,7 +93,10 @@ class ir_cron(models.Model):
     def method_direct_trigger(self):
         self.check_access_rights('write')
         for cron in self:
+            cron._try_lock()
+            _logger.info('Manually starting job `%s`.', cron.name)
             cron.with_user(cron.user_id).with_context({'lastcall': cron.lastcall}).ir_actions_server_id.run()
+            _logger.info('Job `%s` done.', cron.name)
             cron.lastcall = fields.Datetime.now()
         return True
 
@@ -370,14 +374,12 @@ class ir_cron(models.Model):
 
             log_depth = (None if _logger.isEnabledFor(logging.DEBUG) else 1)
             odoo.netsvc.log(_logger, logging.DEBUG, 'cron.object.execute', (self._cr.dbname, self._uid, '*', cron_name, server_action_id), depth=log_depth)
-            start_time = False
             _logger.info('Starting job `%s`.', cron_name)
-            if _logger.isEnabledFor(logging.DEBUG):
-                start_time = time.time()
+            start_time = time.time()
             self.env['ir.actions.server'].browse(server_action_id).run()
-            _logger.info('Job `%s` done.', cron_name)
+            end_time = time.time()
+            _logger.info('Job done: `%s` (%.3fs).', cron_name, end_time - start_time)
             if start_time and _logger.isEnabledFor(logging.DEBUG):
-                end_time = time.time()
                 _logger.debug('%.3fs (cron %s, server action %d with uid %d)', end_time - start_time, cron_name, server_action_id, self.env.uid)
             self.pool.signal_changes()
         except Exception as e:
@@ -528,6 +530,7 @@ class ir_cron_trigger(models.Model):
     _name = 'ir.cron.trigger'
     _description = 'Triggered actions'
     _rec_name = 'cron_id'
+    _allow_sudo_commands = False
 
     cron_id = fields.Many2one("ir.cron", index=True)
     call_at = fields.Datetime()

@@ -217,7 +217,7 @@ registry.category("web_tour.tours").add("PaymentScreenRoundingHalfUpCashAndBank"
             ProductScreen.clickHomeCategory(),
             ProductScreen.addOrderline("Product Test 40", "1"),
             ProductScreen.clickPartnerButton(),
-            ProductScreen.clickCustomer("Nicole Ford"),
+            ProductScreen.clickCustomer("Partner Test 1"),
             ProductScreen.clickPayButton(),
 
             PaymentScreen.totalIs("40.00"),
@@ -238,7 +238,7 @@ registry.category("web_tour.tours").add("PaymentScreenRoundingHalfUpCashAndBank"
             ProductScreen.clickHomeCategory(),
             ProductScreen.addOrderline("Product Test 41", "1"),
             ProductScreen.clickPartnerButton(),
-            ProductScreen.clickCustomer("Nicole Ford"),
+            ProductScreen.clickCustomer("Partner Test 1"),
             ProductScreen.clickPayButton(),
 
             PaymentScreen.totalIs("41.00"),
@@ -273,5 +273,23 @@ registry.category("web_tour.tours").add("PaymentScreenTotalDueWithOverPayment", 
             PaymentScreen.remainingIs("0.0"),
             PaymentScreen.changeIs("3.05"),
             PaymentScreen.totalDueIs("1.95"),
+        ].flat(),
+});
+
+registry.category("web_tour.tours").add("InvoiceShipLaterAccessRight", {
+    test: true,
+    url: "/pos/ui",
+    steps: () =>
+        [
+            ProductScreen.confirmOpeningPopup(),
+            ProductScreen.clickHomeCategory(),
+            ProductScreen.addOrderline("Whiteboard Pen", "1"),
+            ProductScreen.clickPartnerButton(),
+            ProductScreen.clickCustomer("Deco Addict"),
+            ProductScreen.clickPayButton(),
+
+            PaymentScreen.clickPaymentMethod("Cash"),
+            PaymentScreen.clickShipLaterButton(),
+            PaymentScreen.clickValidate(),
         ].flat(),
 });

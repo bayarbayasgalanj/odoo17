@@ -374,6 +374,49 @@ QUnit.module("Fields", (hooks) => {
         }
     );
 
+    QUnit.test("save record with image field modified by onchange", async function (assert) {
+        serverData.models.partner.onchanges = {
+            foo: (data) => {
+                data.document = MY_IMAGE;
+            },
+        };
+        const rec = serverData.models.partner.records.find((rec) => rec.id === 1);
+        rec.document = "3 kb";
+        rec.write_date = "2022-08-05 08:37:00"; // 1659688620000
+
+        // 1659692220000
+        const lastUpdates = ["2022-08-05 09:37:00"];
+        let index = 0;
+
+        await makeView({
+            type: "form",
+            resModel: "partner",
+            resId: 1,
+            serverData,
+            arch: /* xml */ `
+                    <form>
+                        <field name="foo"/>
+                        <field name="document" widget="image" />
+                    </form>`,
+            mockRPC(_route, { method, args }) {
+                if (method === "web_save") {
+                    args[1].write_date = lastUpdates[index];
+                    args[1].document = "3 kb";
+                    index++;
+                }
+            },
+        });
+        assert.strictEqual(getUnique(target.querySelector(".o_field_image img")), "1659688620000");
+        await editInput(target, "[name='foo'] input", "grrr");
+        assert.strictEqual(
+            target.querySelector("div[name=document] img").dataset.src,
+            `data:image/png;base64,${MY_IMAGE}`
+        );
+
+        await clickSave(target);
+        assert.strictEqual(getUnique(target.querySelector(".o_field_image img")), "1659692220000");
+    });
+
     QUnit.test("ImageField: option accepted_file_extensions", async function (assert) {
         await makeView({
             type: "form",
@@ -474,7 +517,8 @@ QUnit.module("Fields", (hooks) => {
     });
 
     QUnit.test("ImageField: zoom and zoom_delay options (edit)", async function (assert) {
-        serverData.models.partner.records[0].document = MY_IMAGE;
+        serverData.models.partner.records[0].document = "3 kb";
+        serverData.models.partner.records[0].write_date = "2022-08-05 08:37:00";
 
         await makeView({
             type: "form",
@@ -488,8 +532,15 @@ QUnit.module("Fields", (hooks) => {
         });
 
         assert.ok(
-            !target.querySelector(".o_field_image img").dataset["tooltipInfo"],
-            "the tooltip is not present in edition"
+            JSON.parse(
+                target.querySelector(".o_field_image img").dataset["tooltipInfo"]
+            ).url.endsWith("/web/image?model=partner&id=1&field=document&unique=1659688620000"),
+            "tooltip show the full image from the field value"
+        );
+        assert.strictEqual(
+            target.querySelector(".o_field_image img").dataset["tooltipDelay"],
+            "600",
+            "tooltip has the right delay"
         );
     });
 
@@ -659,7 +710,7 @@ QUnit.module("Fields", (hooks) => {
             fileInput.files = list.files;
             fileInput.dispatchEvent(new Event("change"));
             // It can take some time to encode the data as a base64 url
-            await new Promise((resolve) => setTimeout(resolve, 50));
+            await new Promise((resolve) => setTimeout(resolve, 100));
             // Wait for a render
             await nextTick();
         }
@@ -693,6 +744,52 @@ QUnit.module("Fields", (hooks) => {
                 .dataset.src.includes("data:image/png;base64"),
             "image field should be set"
         );
+    });
+
+    QUnit.test("unique in url doesn't change on onchange", async (assert) => {
+        serverData.models.partner.onchanges = {
+            foo: () => {},
+        };
+
+        const rec = serverData.models.partner.records.find((rec) => rec.id === 1);
+        rec.document = "3 kb";
+        rec.write_date = "2022-08-05 08:37:00";
+
+        await makeView({
+            resId: 1,
+            type: "form",
+            resModel: "partner",
+            serverData,
+            arch: `
+                <form>
+                    <field name="foo" />
+                    <field name="document" widget="image" required="1" />
+                </form>`,
+            mockRPC(route, { method, args }) {
+                assert.step(method);
+                if (method === "web_save") {
+                    // 1659692220000
+                    args[1].write_date = "2022-08-05 09:37:00";
+                }
+            },
+        });
+
+        assert.verifySteps(["get_views", "web_read"]);
+        assert.strictEqual(getUnique(target.querySelector(".o_field_image img")), "1659688620000");
+
+        assert.verifySteps([]);
+        // same unique as before
+        assert.strictEqual(getUnique(target.querySelector(".o_field_image img")), "1659688620000");
+
+        await editInput(target, ".o_field_widget[name='foo'] input", "grrr");
+        assert.verifySteps(["onchange"]);
+        // also same unique
+        assert.strictEqual(getUnique(target.querySelector(".o_field_image img")), "1659688620000");
+
+        await clickSave(target);
+        assert.verifySteps(["web_save"]);
+
+        assert.strictEqual(getUnique(target.querySelector(".o_field_image img")), "1659692220000");
     });
 
     QUnit.test("unique in url change on record change", async (assert) => {

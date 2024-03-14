@@ -14,7 +14,7 @@ class StockMoveLine(models.Model):
     _name = "stock.move.line"
     _description = "Product Moves (Stock Move Line)"
     _rec_name = "product_id"
-    _order = "result_package_id desc, location_id asc, location_dest_id asc, picking_id asc, id"
+    _order = "result_package_id desc, id"
 
     picking_id = fields.Many2one(
         'stock.picking', 'Transfer', auto_join=True,
@@ -84,6 +84,8 @@ class StockMoveLine(models.Model):
     description_picking = fields.Text(string="Description picking")
     quant_id = fields.Many2one('stock.quant', "Pick From", store=False)  # Dummy field for the detailed operation view
     product_packaging_qty = fields.Float(string="Reserved Packaging Quantity", compute='_compute_product_packaging_qty')
+    picking_location_id = fields.Many2one(related='picking_id.location_id')
+    picking_location_dest_id = fields.Many2one(related='picking_id.location_dest_id')
 
     @api.depends('product_uom_id.category_id', 'product_id.uom_id.category_id', 'move_id.product_uom', 'product_id.uom_id')
     def _compute_product_uom_id(self):
@@ -288,7 +290,7 @@ class StockMoveLine(models.Model):
                 ON
                     stock_move_line (id, company_id, product_id, lot_id, location_id, owner_id, package_id)
                 WHERE
-                    (state IS NULL OR state NOT IN ('cancel', 'done')) AND quantity > 0 AND not picked""")
+                    (state IS NULL OR state NOT IN ('cancel', 'done')) AND quantity_product_uom > 0 AND not picked""")
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -383,7 +385,7 @@ class StockMoveLine(models.Model):
         updates = {}
         for key, model in triggers:
             if key in vals:
-                updates[key] = self.env[model].browse(vals[key])
+                updates[key] = vals[key] if isinstance(vals[key], models.BaseModel) else self.env[model].browse(vals[key])
 
         if 'result_package_id' in updates:
             for ml in self.filtered(lambda ml: ml.package_level_id):
@@ -482,11 +484,15 @@ class StockMoveLine(models.Model):
         quants_by_product = self.env['stock.quant']._get_quants_by_products_locations(self.product_id, self.location_id)
         for ml in self:
             # Unlinking a move line should unreserve.
-            if not float_is_zero(ml.quantity, precision_digits=precision) and ml.move_id and not ml.move_id._should_bypass_reservation(ml.location_id):
+            if not float_is_zero(ml.quantity_product_uom, precision_digits=precision) and ml.move_id and not ml.move_id._should_bypass_reservation(ml.location_id):
                 quants = quants_by_product[ml.product_id.id]
-                quants._update_reserved_quantity(ml.product_id, ml.location_id, -ml.quantity, lot_id=ml.lot_id, package_id=ml.package_id, owner_id=ml.owner_id, strict=True)
+                quants._update_reserved_quantity(ml.product_id, ml.location_id, -ml.quantity_product_uom, lot_id=ml.lot_id, package_id=ml.package_id, owner_id=ml.owner_id, strict=True)
         moves = self.mapped('move_id')
+        package_levels = self.package_level_id
         res = super().unlink()
+        package_levels = package_levels.filtered(lambda pl: not (pl.move_line_ids or pl.move_ids))
+        if package_levels:
+            package_levels.unlink()
         if moves:
             # Add with_prefetch() to set the _prefecht_ids = _ids
             # because _prefecht_ids generator look lazily on the cache of move_id
@@ -703,7 +709,7 @@ class StockMoveLine(models.Model):
             ('location_id', '=', location_id.id),
             ('owner_id', '=', owner_id.id if owner_id else False),
             ('package_id', '=', package_id.id if package_id else False),
-            ('quantity', '>', 0.0),
+            ('quantity_product_uom', '>', 0.0),
             ('picked', '=', False),
             ('id', 'not in', tuple(ml_ids_to_ignore)),
         ]
@@ -884,6 +890,11 @@ class StockMoveLine(models.Model):
             'views': [[False, "form"]],
             'res_id': self.id,
         }
+
+    def action_put_in_pack(self):
+        for picking in self.picking_id:
+            picking.action_put_in_pack()
+        return self.picking_id.action_detailed_operations()
 
     def _get_revert_inventory_move_values(self):
         self.ensure_one()

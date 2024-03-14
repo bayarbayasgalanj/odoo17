@@ -83,7 +83,9 @@ class DiscussChannel(models.Model):
     def _execute_command_help_message_extra(self):
         msg = super()._execute_command_help_message_extra()
         if self.channel_type == 'livechat':
-            return msg + _("Type <b>:shortcut</b> to insert a canned response in your message.<br>")
+            return msg + html_escape(
+                _("%(new_line)sType %(bold_start)s:shortcut%(bold_end)s to insert a canned response in your message.")
+            ) % {"bold_start": Markup("<b>"), "bold_end": Markup("</b>"), "new_line": Markup("<br>")}
         return msg
 
     def execute_command_history(self, **kwargs):
@@ -239,3 +241,6 @@ class DiscussChannel(models.Model):
             chatbot_script,
             Markup('<div class="o_mail_notification">%s</div>') % _('Restarting conversation...'),
         )
+
+    def _types_allowing_seen_infos(self):
+        return super()._types_allowing_seen_infos() + ["livechat"]

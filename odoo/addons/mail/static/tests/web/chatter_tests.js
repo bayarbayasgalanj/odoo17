@@ -54,6 +54,7 @@ QUnit.test("can post a message on a record thread", async (assert) => {
                         attachment_tokens: [],
                         canned_response_ids: [],
                         message_type: "comment",
+                        partner_additional_values: {},
                         partner_emails: [],
                         partner_ids: [],
                         subtype_xmlid: "mail.mt_comment",
@@ -95,6 +96,7 @@ QUnit.test("can post a note on a record thread", async (assert) => {
                         body: "hey",
                         canned_response_ids: [],
                         message_type: "comment",
+                        partner_additional_values: {},
                         partner_emails: [],
                         partner_ids: [],
                         subtype_xmlid: "mail.mt_note",
@@ -312,6 +314,7 @@ QUnit.test("base rendering when chatter has no record", async () => {
     await contains(".o-mail-AttachmentBox", { count: 0 });
     await contains(".o-mail-Chatter .o-mail-Thread");
     await contains(".o-mail-Message");
+    await contains(".o-mail-Message-author", { text: "Mitchell Admin" });
     await contains(".o-mail-Message-body", { text: "Creating a new record..." });
     await contains("button", { count: 0, text: "Load More" });
     await contains(".o-mail-Message-actions");
@@ -842,5 +845,5 @@ QUnit.test("Mentions in composer should still work when using pager", async () =
     await click("button", { text: "Log note" });
     await click(".o_pager_next");
     await insertText(".o-mail-Composer-input", "@");
-    await contains(".o-mail-Composer-suggestion");
+    await contains(".o-mail-Composer-suggestion", { count: 2 });
 });

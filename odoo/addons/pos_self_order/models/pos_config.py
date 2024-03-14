@@ -163,23 +163,6 @@ class PosConfig(models.Model):
             if (vals.get('self_ordering_service_mode') == 'counter' or record.self_ordering_service_mode == 'counter') and vals.get('self_ordering_mode') == 'mobile':
                 vals['self_ordering_pay_after'] = 'each'
 
-            if 'self_ordering_image_home_ids' in vals and self.env.context.get('from_settings_view'):
-                linked_ids = set(record.self_ordering_image_home_ids.ids)
-
-                # Changes in the splash screen field always results to an array of link commands or a single set command.
-                # We inspect the commands to determine which attachments should be unlinked.
-                # We only care about the link command. We can consider set command as absolute as it will replace all.
-                for command in vals['self_ordering_image_home_ids']:
-                    if command[0] == 4:
-                        _id = command[1]
-                        if _id in linked_ids:
-                            linked_ids.remove(_id)
-
-                # Remaining items in linked_ids should be unlinked.
-                unlink_commands = [Command.unlink(_id) for _id in linked_ids]
-
-                vals['self_ordering_image_home_ids'] = unlink_commands + vals['self_ordering_image_home_ids']
-
             if vals.get('self_ordering_mode') == 'mobile' and vals.get('self_ordering_pay_after') == 'meal':
                 vals['self_ordering_service_mode'] = 'table'
         return super().write(vals)
@@ -337,10 +320,26 @@ class PosConfig(models.Model):
             )
         )
 
+    def _get_kitchen_printer(self):
+        self.ensure_one()
+        printerData = {}
+        for printer in self.printer_ids:
+            printerData[printer.id] = {
+                "printer_type": printer.printer_type,
+                "proxy_ip": printer.proxy_ip,
+                "product_categories_ids": printer.product_categories_ids.ids,
+            }
+        return printerData
+
+    def _get_self_ordering_payment_methods_data(self, payment_methods):
+        excluded_fields = ['image']
+        payment_search_fields = self.current_session_id._loader_params_pos_payment_method()['search_params']['fields']
+        filtered_fields = [field for field in payment_search_fields if field not in excluded_fields]
+        return payment_methods.read(filtered_fields)
+
     def _get_self_ordering_data(self):
         self.ensure_one()
-        payment_search_params = self.current_session_id._loader_params_pos_payment_method()
-        payment_methods = self._get_allowed_payment_methods().read(payment_search_params['search_params']['fields'])
+        payment_methods = self._get_self_ordering_payment_methods_data(self._get_allowed_payment_methods())
         default_language = self.self_ordering_default_language_id.read(["code", "name", "iso_code", "flag_image_url"])
 
         return {
@@ -373,6 +372,7 @@ class PosConfig(models.Model):
                 "receipt_header": self.receipt_header,
                 "receipt_footer": self.receipt_footer,
             },
+            "kitchen_printers": self._get_kitchen_printer(),
         }
 
     def _get_combos_data(self):
@@ -395,7 +395,7 @@ class PosConfig(models.Model):
         for image in images:
             encoded_images.append({
                 'id': image.id,
-                'data': image.datas.decode('utf-8'),
+                'data': image.sudo().datas.decode('utf-8'),
             })
         return encoded_images
 

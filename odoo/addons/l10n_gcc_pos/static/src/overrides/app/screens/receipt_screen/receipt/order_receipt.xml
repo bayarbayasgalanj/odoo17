@@ -35,18 +35,20 @@
             </div>
         </xpath>
 
-        <xpath expr="//t[@t-if='props.data.rounding_applied']/.." position="attributes">
-            <attribute name="t-if">!props.data.is_gcc_country</attribute>
+        <xpath expr="//t[@t-if='props.data.rounding_applied']" position="attributes">
+            <attribute name="t-if" add=" and !props.data.is_gcc_country" separator=" "/>
         </xpath>
-        <xpath expr="//t[@t-if='props.data.rounding_applied']/.." position="after">
-            <div t-if="props.data.is_gcc_country" class="pos-receipt-amount pos-receipt-amount-arabic" t-translation="off">
-                Rounding / التقريب
-                <span t-esc="props.formatCurrency(props.data.rounding_applied)" class="pos-receipt-right-align"/>
-            </div>
-            <div class="pos-receipt-amount">
-                To Pay
-                <span t-esc="props.formatCurrency(props.data.amount_total + props.data.rounding_applied)" class="pos-receipt-right-align"/>
-            </div>
+        <xpath expr="//t[@t-if='props.data.rounding_applied and !props.data.is_gcc_country']" position="after">
+            <t t-elif="props.data.rounding_applied and props.data.is_gcc_country">
+                <div class="pos-receipt-amount pos-receipt-amount-arabic" t-translation="off">
+                    Rounding / التقريب
+                    <span t-esc="props.formatCurrency(props.data.rounding_applied)" class="pos-receipt-right-align"/>
+                </div>
+                <div class="pos-receipt-amount">
+                    To Pay
+                    <span t-esc="props.formatCurrency(props.data.amount_total + props.data.rounding_applied)" class="pos-receipt-right-align"/>
+                </div>
+            </t>
         </xpath>
 
         <xpath expr="//span[@t-esc='props.formatCurrency(props.data.change)']/.." position="attributes">
@@ -69,9 +71,17 @@
             </div>
         </xpath>
 
-        <xpath expr="//div[hasclass('pos-receipt-taxes')]/span[text()='Total']" position="replace">
-            <span t-if="props.data.is_gcc_country" t-translation="off">Total Taxes / إجمالي الضرائب</span>
-            <span t-else="">Total</span>
+        <xpath expr="//div[hasclass('pos-receipt-taxes')]/span[text()='Total']" position="after">
+            <t t-if="props.data.is_gcc_country">
+                <span/>
+                <span t-translation="off">النسبة</span>
+                <span t-translation="off">مبلغ الضريبة</span>
+                <span t-translation="off">قبل الضريبة</span>
+                <span t-translation="off">الإجمالي</span>
+            </t>
+        </xpath>
+        <xpath expr="//Orderline">
+            <div t-if="props.data.is_gcc_country" style="display: inline-flex;" t-translation="off">Taxes / الضرائب</div>:<span t-esc="line.tax " style="margin-left: 5px"/>
         </xpath>
     </t>
 </templates>

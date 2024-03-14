@@ -50,7 +50,7 @@ const tldWhitelist = [
     'ug', 'uk', 'um', 'us', 'uy', 'uz', 'va', 'vc', 've', 'vg', 'vi', 'vn',
     'vu', 'wf', 'ws', 'ye', 'yt', 'yu', 'za', 'zm', 'zr', 'zw', 'co\\.uk'];
 
-const urlRegexBase = `|(?:[-a-zA-Z0-9@:%._\\+~#=]{1,64}\\.))[-a-zA-Z0-9@:%._\\+~#=]{2,256}\\.[a-zA-Z][a-zA-Z0-9]{1,62}|(?:[-a-zA-Z0-9@:%._\\+~#=]{2,256}\\.(?:${tldWhitelist.join('|')})\\b))(?:\\/[^\\s.,'")}\\]]*[?#.,)}\\]'"]?[^\\s.,'")}\\]]+|(?:[^!(){}.,\\[\\]'"\\s]+)|\\/[^\\s.,'")}\\]]*[^\\s?#.,'")}\\]]*)?`;
+const urlRegexBase = `|(?:www.))[-a-zA-Z0-9@:%._\\+~#=]{2,256}\\.[a-zA-Z][a-zA-Z0-9]{1,62}|(?:[-a-zA-Z0-9@:%._\\+~#=]{2,256}\\.(?:${tldWhitelist.join('|')})\\b))(?:(?:[/?#])[^\\s]*[^!.,})\\]'"\\s]|(?:[^!(){}.,[\\]'"\\s]+))?`;
 const httpCapturedRegex= `(https?:\\/\\/)`;
 
 export const URL_REGEX = new RegExp(`((?:(?:${httpCapturedRegex}${urlRegexBase})`, 'i');
@@ -63,14 +63,22 @@ export const PROTECTED_BLOCK_TAG = ['TR','TD','TABLE','TBODY','UL','OL','LI'];
 
 /**
  * Array of all the classes used by the editor to change the font size.
+ *
+ * Note: the Bootstrap "small" class is an exception, the editor does not allow
+ * to set it but it did in the past and we want to remove it when applying an
+ * override of the font-size.
  */
 export const FONT_SIZE_CLASSES = ["display-1-fs", "display-2-fs", "display-3-fs", "display-4-fs", "h1-fs",
-    "h2-fs", "h3-fs", "h4-fs", "h5-fs", "h6-fs", "base-fs", "small"];
+    "h2-fs", "h3-fs", "h4-fs", "h5-fs", "h6-fs", "base-fs", "o_small-fs", "small"];
 
 /**
  * Array of all the classes used by the editor to change the text style.
+ *
+ * Note: the Bootstrap "small" class was actually part of "text style"
+ * configuration in the past... but also of the "font size" configuration (see
+ * FONT_SIZE_CLASSES). It should be mentioned here too.
  */
-export const TEXT_STYLE_CLASSES = ["display-1", "display-2", "display-3", "display-4", "lead"];
+export const TEXT_STYLE_CLASSES = ["display-1", "display-2", "display-3", "display-4", "lead", "o_small", "small"];
 
 //------------------------------------------------------------------------------
 // Position and sizes
@@ -755,7 +763,12 @@ export function getSelectedNodes(editable) {
  */
 export function getDeepRange(editable, { range, sel, splitText, select, correctTripleClick } = {}) {
     sel = sel || editable.parentElement && editable.ownerDocument.getSelection();
-    if (sel && sel.isCollapsed && sel.anchorNode && sel.anchorNode.nodeName === "BR") {
+    if (
+        sel &&
+        sel.isCollapsed &&
+        sel.anchorNode &&
+        (sel.anchorNode.nodeName === "BR" || (sel.anchorNode.nodeType === Node.TEXT_NODE && sel.anchorNode.textContent === ''))
+    ) {
         setCursorStart(sel.anchorNode.parentElement, false);
     }
     range = range ? range.cloneRange() : sel && sel.rangeCount && sel.getRangeAt(0).cloneRange();
@@ -845,7 +858,7 @@ export function getDeepestPosition(node, offset) {
     let direction = DIRECTIONS.RIGHT;
     let next = node;
     while (next) {
-        if (isVisible(next) || isZWS(next)) {
+        if ((isVisible(next) || isZWS(next)) && (!isBlock(next) || next.isContentEditable)) {
             // Valid node: update position then try to go deeper.
             if (next !== node) {
                 [node, offset] = [next, direction ? 0 : nodeSize(next)];
@@ -853,7 +866,7 @@ export function getDeepestPosition(node, offset) {
             // First switch direction to left if offset is at the end.
             direction = offset < node.childNodes.length;
             next = node.childNodes[direction ? offset : offset - 1];
-        } else if (direction && next.nextSibling && !isBlock(next.nextSibling)) {
+        } else if (direction && next.nextSibling) {
             // Invalid node: skip to next sibling (without crossing blocks).
             next = next.nextSibling;
         } else {
@@ -911,6 +924,31 @@ export function isSelectionInSelectors(selector) {
         return true;
     }
     return false;
+}
+
+export function getOffsetAndCharSize(nodeValue, offset, direction) {
+    //We get the correct offset which corresponds to this offset
+    // If direction is left it means we are coming from the right and
+    // we want to get the end offset of the first element to the left
+    // Example with LEFT direction:
+    // <p>a \uD83D[offset]\uDE0D b</p> -> <p>a \uD83D\uDE0D[offset] b</p> and
+    // size = 2 so delete backward will delete the whole emoji.
+    // Example with Right direction:
+    // <p>a \uD83D[offset]\uDE0D b</p> -> <p>a [offset]\uD83D\uDE0D b</p> and
+    // size = 2 so delete forward will delete the whole emoji.
+    const splittedNodeValue = [...nodeValue];
+    let charSize = 1;
+    let newOffset = offset;
+    let currentSize = 0;
+    for (const item of splittedNodeValue) {
+        currentSize += item.length;
+        if (currentSize >= offset) {
+            newOffset = direction == DIRECTIONS.LEFT ? currentSize : currentSize - item.length;
+            charSize = item.length;
+            break;
+        }
+    }
+    return [newOffset, charSize];
 }
 
 //------------------------------------------------------------------------------
@@ -1132,6 +1170,7 @@ export const formatSelection = (editor, formatName, {applyStyle, formatProps} = 
     if (zws) {
         const siblings = [...zws.parentElement.childNodes];
         if (
+            !isBlock(zws.parentElement) &&
             selectedTextNodes.includes(siblings[0]) &&
             selectedTextNodes.includes(siblings[siblings.length - 1])
         ) {
@@ -1242,13 +1281,13 @@ export function isBlock(node) {
         return false;
     }
     // The node might not be in the DOM, in which case it has no CSS values.
-    if (window.document !== node.ownerDocument) {
+    if (!node.isConnected) {
         return blockTagNames.includes(tagName);
     }
     // We won't call `getComputedStyle` more than once per node.
     let style = computedStyles.get(node);
     if (!style) {
-        style = window.getComputedStyle(node);
+        style = node.ownerDocument.defaultView.getComputedStyle(node);
         computedStyles.set(node, style);
     }
     if (style.display) {
@@ -1361,9 +1400,9 @@ export function hasClass(node, props) {
  */
 export function isSelectionFormat(editable, format) {
     const selectedNodes = getTraversedNodes(editable)
-        .filter(n => n.nodeType === Node.TEXT_NODE && n.nodeValue.trim().length);
+        .filter(n => n.nodeType === Node.TEXT_NODE);
     const isFormatted = formatsSpecs[format].isFormatted;
-    return selectedNodes && selectedNodes.every(n => isFormatted(n, editable));
+    return selectedNodes.length && selectedNodes.every(n => isFormatted(n, editable));
 }
 
 export function isUnbreakable(node) {
@@ -1410,13 +1449,24 @@ export function containsUnbreakable(node) {
     }
     return isUnbreakable(node) || containsUnbreakable(node.firstChild);
 }
+// TODO rename this function in master: it also handles Odoo icons, not only
+// font awesome ones. Also maybe just use the ICON_SELECTOR and `matches`?
+const iconTags = ['I', 'SPAN'];
+const iconClasses = ['fa', 'fab', 'fad', 'far', 'oi'];
 export function isFontAwesome(node) {
+    // See ICON_SELECTOR
     return (
         node &&
-        (node.nodeName === 'I' || node.nodeName === 'SPAN') &&
-        ['fa', 'fab', 'fad', 'far'].some(faClass => node.classList.contains(faClass))
+        iconTags.includes(node.nodeName) &&
+        iconClasses.some(cls => node.classList.contains(cls))
     );
 }
+export const ICON_SELECTOR = iconTags.map(tag => {
+    return iconClasses.map(cls => {
+        return `${tag}.${cls}`;
+    }).join(', ');
+}).join(', ');
+
 export function isZWS(node) {
     return (
         node &&
@@ -1792,7 +1842,7 @@ export function isEmptyBlock(blockEl) {
     if (!blockEl || blockEl.nodeType !== Node.ELEMENT_NODE) {
         return false;
     }
-    if (visibleCharRegex.test(blockEl.textContent)) {
+    if (isFontAwesome(blockEl) || visibleCharRegex.test(blockEl.textContent)) {
         return false;
     }
     if (blockEl.querySelectorAll('br').length >= 2) {
@@ -1855,8 +1905,8 @@ export function getFontSizeDisplayValue(sel, getCSSVariableValue, convertNumeric
     `);
     let remValue;
     if (closestFontSizedEl) {
-        const customFontSize = closestFontSizedEl.style.fontSize;
-        if (customFontSize) {
+        const useFontSizeInput = closestFontSizedEl.style.fontSize;
+        if (useFontSizeInput) {
             // Use the computed value to always convert to px. However, this
             // currently does not check that the inline font-size is the one
             // actually having an effect (there could be an !important CSS rule
@@ -1947,6 +1997,11 @@ export function splitElement(element, offset) {
     for (const child of [...element.childNodes]) {
         index < offset ? before.appendChild(child) : after.appendChild(child);
         index++;
+    }
+    // e.g.: <p>Test/banner</p> + ENTER <=> <p>Test</p><div class="o_editor_banner>...</div><p><br></p>
+    const blockEl = closestBlock(after);
+    if (blockEl) {
+        fillEmpty(blockEl);
     }
     element.before(before);
     element.after(after);
@@ -2076,10 +2131,12 @@ export function setTagName(el, newTagName) {
     if (el.tagName === newTagName) {
         return el;
     }
-    var n = document.createElement(newTagName);
-    var attr = el.attributes;
-    for (var i = 0, len = attr.length; i < len; ++i) {
-        n.setAttribute(attr[i].name, attr[i].value);
+    const n = document.createElement(newTagName);
+    if (el.nodeName !== 'LI') {
+        const attributes = el.attributes;
+        for (const attr of attributes) {
+            n.setAttribute(attr.name, attr.value);
+        }
     }
     while (el.firstChild) {
         n.append(el.firstChild);
@@ -2648,7 +2705,8 @@ export function enforceWhitespace(el, offset, direction, rule) {
         if (
             spaceVisibility &&
             !foundVisibleSpaceTextNode &&
-            getState(...rightPos(spaceNode), DIRECTIONS.RIGHT).cType & CTGROUPS.BLOCK
+            getState(...rightPos(spaceNode), DIRECTIONS.RIGHT).cType & CTGROUPS.BLOCK &&
+            getState(...leftPos(spaceNode), DIRECTIONS.LEFT).cType !== CTYPES.CONTENT
         ) {
             spaceVisibility = false;
         }
@@ -2714,7 +2772,7 @@ export function rgbToHex(rgb = '', node = null) {
 
 export function parseHTML(document, html) {
     const fragment = document.createDocumentFragment();
-    const parser = new DOMParser();
+    const parser = new document.defaultView.DOMParser();
     const parsedDocument = parser.parseFromString(html, 'text/html');
     fragment.replaceChildren(...parsedDocument.body.childNodes);
     return fragment;
@@ -2730,6 +2788,20 @@ export function pxToFloat(sizeString) {
     return parseFloat(sizeString.replace('px', ''));
 }
 
+/**
+ * Returns position of a range in form of object (end
+ * position of a range in case of non-collapsed range).
+ *
+ * @param {HTMLElement} el element for which range postion will be calculated
+ * @param {Document} document
+ * @param {Object} [options]
+ * @param {Number} [options.marginRight] right margin to be considered
+ * @param {Number} [options.marginBottom] bottom margin to be considered
+ * @param {Number} [options.marginTop] top margin to be considered
+ * @param {Number} [options.marginLeft] left margin to be considered
+ * @param {Function} [options.getContextFromParentRect] to get context rect from parent
+ * @returns {Object | undefined}
+ */
 export function getRangePosition(el, document, options = {}) {
     const selection = document.getSelection();
     if (!selection.rangeCount) return;

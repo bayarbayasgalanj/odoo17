@@ -44,6 +44,7 @@ class AccountBankStatementLine(models.Model):
         comodel_name='account.move',
         auto_join=True,
         string='Journal Entry', required=True, readonly=True, ondelete='cascade',
+        index='btree_not_null',
         check_company=True)
     statement_id = fields.Many2one(
         comodel_name='account.bank.statement',
@@ -590,7 +591,7 @@ class AccountBankStatementLine(models.Model):
                 self.journal_id.display_name,
             ))
 
-        company_currency = self.journal_id.company_id.currency_id
+        company_currency = self.journal_id.company_id.sudo().currency_id
         journal_currency = self.journal_id.currency_id or company_currency
         foreign_currency = self.foreign_currency_id or journal_currency or company_currency
 

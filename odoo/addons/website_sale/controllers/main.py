@@ -343,7 +343,7 @@ class WebsiteSale(payment_portal.PaymentPortal):
 
         filter_by_price_enabled = website.is_view_active('website_sale.filter_products_price')
         if filter_by_price_enabled:
-            company_currency = website.company_id.currency_id
+            company_currency = website.company_id.sudo().currency_id
             conversion_rate = request.env['res.currency']._get_conversion_rate(
                 company_currency, website.currency_id, request.website.company_id, fields.Date.today())
         else:
@@ -398,18 +398,17 @@ class WebsiteSale(payment_portal.PaymentPortal):
                     max_price = max_price if max_price >= available_min_price else available_max_price
                     post['max_price'] = max_price
 
-        if filter_by_tags_enabled:
-            if (
-                search_product.product_tag_ids
-                or search_product.product_variant_ids.additional_product_tag_ids
-            ):
-                ProductTag = request.env['product.tag']
-                all_tags = ProductTag.search(
-                    [('product_ids.is_published', '=', True), ('visible_on_ecommerce', '=', True)]
-                    + website_domain
-                )
-            else:
-                all_tags = []
+        ProductTag = request.env['product.tag']
+        if filter_by_tags_enabled and search_product:
+            all_tags = ProductTag.search(
+                expression.AND([
+                    [('product_ids.is_published', '=', True), ('visible_on_ecommerce', '=', True)],
+                    website_domain
+                ])
+            )
+        else:
+            all_tags = ProductTag
+
         categs_domain = [('parent_id', '=', False)] + website_domain
         if search:
             search_categories = Category.search(
@@ -423,7 +422,7 @@ class WebsiteSale(payment_portal.PaymentPortal):
         if category:
             url = "/shop/category/%s" % slug(category)
 
-        pager = website.pager(url=url, total=product_count, page=page, step=ppg, scope=7, url_args=post)
+        pager = website.pager(url=url, total=product_count, page=page, step=ppg, scope=5, url_args=post)
         offset = pager['offset']
         products = search_product[offset:offset + ppg]
 
@@ -1344,7 +1343,7 @@ class WebsiteSale(payment_portal.PaymentPortal):
             'account_on_checkout': request.website.account_on_checkout,
             'is_public_user': is_public_user,
             'is_public_order': order._is_public_order(),
-            'use_same': is_public_user or ('use_same' in kw and str2bool(kw.get('use_same'))),
+            'use_same': is_public_user or ('use_same' in kw and str2bool(kw.get('use_same') or '0')),
         }
         render_values.update(self._get_country_related_render_values(kw, render_values))
         return request.render("website_sale.address", render_values)
@@ -1596,6 +1595,9 @@ class WebsiteSale(payment_portal.PaymentPortal):
             and partner_sudo != order_sudo.partner_shipping_id
         ):
             order_sudo.partner_shipping_id = partner_id
+            if order_sudo.carrier_id:
+                # update carrier rates on shipping address change
+                order_sudo._check_carrier_quotation(force_carrier_id=order_sudo.carrier_id.id)
         else:
             # TODO someday we should gracefully handle invalid addresses
             return
@@ -1680,7 +1682,7 @@ class WebsiteSale(payment_portal.PaymentPortal):
     def _get_shop_payment_values(self, order, **kwargs):
         checkout_page_values = {
             'website_sale_order': order,
-            'errors': [],
+            'errors': self._get_shop_payment_errors(order),
             'partner': order.partner_invoice_id,
             'order': order,
             'submit_button_label': _("Pay now"),
@@ -1703,13 +1705,6 @@ class WebsiteSale(payment_portal.PaymentPortal):
             has_storable_products = any(
                 line.product_id.type in ['consu', 'product'] for line in order.order_line
             )
-            if not order._get_delivery_methods() and has_storable_products:
-                values['errors'].append((
-                    _('Sorry, we are unable to ship your order'),
-                    _('No shipping method is available for your current order and shipping address.'
-                    ' Please contact us for more information.')
-                ))
-
             if has_storable_products:
                 if order.carrier_id and not order.delivery_rating_success:
                     order._remove_delivery_line()
@@ -1722,6 +1717,23 @@ class WebsiteSale(payment_portal.PaymentPortal):
             ).id
 
         return values
+
+    def _get_shop_payment_errors(self, order):
+        """ Check that there is no error that should block the payment.
+
+        :param sale.order order: The sales order to pay
+        :return: A list of errors (error_title, error_message)
+        :rtype: list[tuple]
+        """
+        errors = []
+
+        if not order.only_services and not order._get_delivery_methods():
+            errors.append((
+                _('Sorry, we are unable to ship your order'),
+                _('No shipping method is available for your current order and shipping address. '
+                   'Please contact us for more information.'),
+            ))
+        return errors
 
     @http.route('/shop/payment', type='http', auth='public', website=True, sitemap=False)
     def shop_payment(self, **post):
@@ -1736,7 +1748,7 @@ class WebsiteSale(payment_portal.PaymentPortal):
         """
         order = request.website.sale_get_order()
 
-        if order and (request.httprequest.method == 'POST' or not order.carrier_id):
+        if order and not order.only_services and (request.httprequest.method == 'POST' or not order.carrier_id):
             # Update order's carrier_id (will be the one of the partner if not defined)
             # If a carrier_id is (re)defined, redirect to "/shop/payment" (GET method to avoid infinite loop)
             carrier_id = post.get('carrier_id')
@@ -1780,6 +1792,12 @@ class WebsiteSale(payment_portal.PaymentPortal):
         else:
             order = request.env['sale.order'].sudo().browse(sale_order_id)
             assert order.id == request.session.get('sale_last_order_id')
+
+        errors = self._get_shop_payment_errors(order)
+        if errors:
+            first_error = errors[0]  # only display first error
+            error_msg = f"{first_error[0]}\n{first_error[1]}"
+            raise ValidationError(error_msg)
 
         tx_sudo = order.get_portal_last_transaction() if order else order.env['payment.transaction']
 

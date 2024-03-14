@@ -2,7 +2,7 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 import base64
-from pytz import UTC
+from pytz import timezone, UTC
 from datetime import datetime, time
 from random import choice
 from string import digits
@@ -90,7 +90,7 @@ class HrEmployeePrivate(models.Model):
         help='Employee bank account to pay salaries')
     permit_no = fields.Char('Work Permit No', groups="hr.group_hr_user", tracking=True)
     visa_no = fields.Char('Visa No', groups="hr.group_hr_user", tracking=True)
-    visa_expire = fields.Date('Visa Expire Date', groups="hr.group_hr_user", tracking=True)
+    visa_expire = fields.Date('Visa Expiration Date', groups="hr.group_hr_user", tracking=True)
     work_permit_expiration_date = fields.Date('Work Permit Expiration Date', groups="hr.group_hr_user", tracking=True)
     has_work_permit = fields.Binary(string="Work Permit", groups="hr.group_hr_user")
     work_permit_scheduled_activity = fields.Boolean(default=False, groups="hr.group_hr_user")
@@ -132,7 +132,7 @@ class HrEmployeePrivate(models.Model):
         help="PIN used to Check In/Out in the Kiosk Mode of the Attendance application (if enabled in Configuration) and to change the cashier in the Point of Sale application.")
     departure_reason_id = fields.Many2one("hr.departure.reason", string="Departure Reason", groups="hr.group_hr_user",
                                           copy=False, tracking=True, ondelete='restrict')
-    departure_description = fields.Html(string="Additional Information", groups="hr.group_hr_user", copy=False, tracking=True)
+    departure_description = fields.Html(string="Additional Information", groups="hr.group_hr_user", copy=False)
     departure_date = fields.Date(string="Departure Date", groups="hr.group_hr_user", copy=False, tracking=True)
     message_main_attachment_id = fields.Many2one(groups="hr.group_hr_user")
     id_card = fields.Binary(string="ID Card Copy", groups="hr.group_hr_user")
@@ -175,7 +175,7 @@ class HrEmployeePrivate(models.Model):
                 continue
             avatar = employee._origin[image_field]
             if not avatar and employee.user_id:
-                avatar = employee.user_id[avatar_field]
+                avatar = employee.user_id.sudo()[avatar_field]
             employee[avatar_field] = avatar
         super(HrEmployeePrivate, self.browse(employee_wo_user_or_image_ids))._compute_avatar(avatar_field, image_field)
 
@@ -410,11 +410,11 @@ class HrEmployeePrivate(models.Model):
         if 'work_contact_id' in vals:
             account_ids = vals.get('bank_account_id') or self.bank_account_id.ids
             if account_ids:
-                bank_accounts = self.env['res.partner.bank'].browse(account_ids)
+                bank_accounts = self.env['res.partner.bank'].sudo().browse(account_ids)
                 for bank_account in bank_accounts:
                     if vals['work_contact_id'] != bank_account.partner_id.id:
                         if bank_account.allow_out_payment:
-                            bank_account.sudo().allow_out_payment = False
+                            bank_account.allow_out_payment = False
                         if vals['work_contact_id']:
                             bank_account.partner_id = vals['work_contact_id']
             self.message_unsubscribe(self.work_contact_id.ids)
@@ -433,6 +433,10 @@ class HrEmployeePrivate(models.Model):
             self.env['discuss.channel'].sudo().search([
                 ('subscription_department_ids', 'in', department_id)
             ])._subscribe_users_automatically()
+        if vals.get('departure_description'):
+            self.message_post(body=_(
+                'Additional Information: \n %(description)s',
+                description=vals.get('departure_description')))
         return res
 
     def unlink(self):
@@ -510,9 +514,28 @@ class HrEmployeePrivate(models.Model):
         # Returns a dict {employee_id: tz}
         return {emp.id: emp._get_tz() for emp in self}
 
+    def _get_expected_attendances(self, date_from, date_to):
+        self.ensure_one()
+        employee_timezone = timezone(self.tz) if self.tz else None
+        calendar = self.resource_calendar_id or self.company_id.resource_calendar_id
+        calendar_intervals = calendar._work_intervals_batch(
+                                date_from,
+                                date_to,
+                                tz=employee_timezone,
+                                resources=self.resource_id,
+                                domain=[('company_id', 'in', [False, self.company_id.id])])[self.resource_id.id]
+        return calendar._get_attendance_intervals_days_data(calendar_intervals)
+
     def _get_calendar_attendances(self, date_from, date_to):
         self.ensure_one()
-        return self.resource_calendar_id.get_work_duration_data(date_from, date_to)
+        employee_timezone = timezone(self.tz) if self.tz else None
+        calendar = self.resource_calendar_id or self.company_id.resource_calendar_id
+        return calendar\
+            .with_context(employee_timezone=employee_timezone)\
+            .get_work_duration_data(
+                date_from,
+                date_to,
+                domain=[('company_id', 'in', [False, self.company_id.id])])
 
     # ---------------------------------------------------------
     # Business Methods

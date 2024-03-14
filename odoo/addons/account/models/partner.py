@@ -111,7 +111,7 @@ class AccountFiscalPosition(models.Model):
             return taxes
         result = self.env['account.tax']
         for tax in taxes:
-            taxes_correspondance = self.tax_ids.filtered(lambda t: t.tax_src_id == tax._origin)
+            taxes_correspondance = self.tax_ids.filtered(lambda t: t.tax_src_id == tax._origin and (not t.tax_dest_id or t.tax_dest_active))
             result |= taxes_correspondance.tax_dest_id if taxes_correspondance else tax
         return result
 
@@ -175,11 +175,7 @@ class AccountFiscalPosition(models.Model):
     def _get_fpos_by_region(self, country_id=False, state_id=False, zipcode=False, vat_required=False):
         if not country_id:
             return False
-        base_domain = [
-            *self._check_company_domain(self.env.company),
-            ('auto_apply', '=', True),
-            ('vat_required', '=', vat_required),
-        ]
+        base_domain = self._prepare_fpos_base_domain(vat_required)
         null_state_dom = state_domain = [('state_ids', '=', False)]
         null_zip_dom = zip_domain = [('zip_from', '=', False), ('zip_to', '=', False)]
         null_country_dom = [('country_id', '=', False), ('country_group_id', '=', False)]
@@ -215,6 +211,13 @@ class AccountFiscalPosition(models.Model):
     def _get_vat_valid(self, delivery, company=None):
         """ Hook for determining VAT validity with more complex VAT requirements """
         return bool(delivery.vat)
+
+    def _prepare_fpos_base_domain(self, vat_required):
+        return [
+            *self._check_company_domain(self.env.company),
+            ('auto_apply', '=', True),
+            ('vat_required', '=', vat_required),
+        ]
 
     @api.model
     def _get_fiscal_position(self, partner, delivery=None):
@@ -275,6 +278,7 @@ class AccountFiscalPositionTax(models.Model):
     company_id = fields.Many2one('res.company', string='Company', related='position_id.company_id', store=True)
     tax_src_id = fields.Many2one('account.tax', string='Tax on Product', required=True, check_company=True)
     tax_dest_id = fields.Many2one('account.tax', string='Tax to Apply', check_company=True)
+    tax_dest_active = fields.Boolean(related="tax_dest_id.active")
 
     _sql_constraints = [
         ('tax_src_dest_uniq',
@@ -373,7 +377,7 @@ class ResPartner(models.Model):
     def _asset_difference_search(self, account_type, operator, operand):
         if operator not in ('<', '=', '>', '>=', '<='):
             return []
-        if type(operand) not in (float, int):
+        if not isinstance(operand, (float, int)):
             return []
         sign = 1
         if account_type == 'liability_payable':
@@ -383,11 +387,11 @@ class ResPartner(models.Model):
               FROM res_partner partner
          LEFT JOIN account_move_line aml ON aml.partner_id = partner.id
               JOIN account_move move ON move.id = aml.move_id
-              JOIN res_company line_company ON line_company.id = line.company_id
+              JOIN res_company line_company ON line_company.id = aml.company_id
         RIGHT JOIN account_account acc ON aml.account_id = acc.id
              WHERE acc.account_type = %s
                AND NOT acc.deprecated
-               AND SPLIT_PART(line_company.parent_path, '/', 1):int == %s
+               AND SPLIT_PART(line_company.parent_path, '/', 1)::int = %s
                AND move.state = 'posted'
           GROUP BY aml.partner_id
             HAVING %s * COALESCE(SUM(aml.amount_residual), 0) {operator} %s''',
@@ -879,3 +883,25 @@ class ResPartner(models.Model):
                 if partner:
                     return partner
         return self.env['res.partner']
+
+    def _merge_method(self, destination, source):
+        """
+        Prevent merging partners that are linked to already hashed journal items.
+        """
+        if self.env['account.move.line'].sudo().search([('move_id.inalterable_hash', '!=', False), ('partner_id', 'in', source.ids)], limit=1):
+            raise UserError(_('Partners that are used in hashed entries cannot be merged.'))
+        return super()._merge_method(destination, source)
+
+    def _deduce_country_code(self):
+        """ deduce the country code based on the information available.
+        we have three cases:
+        - country_code is BE but the VAT number starts with FR, the country code is FR, not BE
+        - if a country-specific field is set (e.g. the codice_fiscale), that country is used for the country code
+        - if the VAT number has no ISO country code, use the country_code in that case.
+        """
+        self.ensure_one()
+
+        country_code = self.country_code
+        if self.vat and self.vat[:2].isalpha():
+            country_code = self.vat[:2].upper()
+        return country_code

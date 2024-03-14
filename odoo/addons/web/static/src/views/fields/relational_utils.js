@@ -340,7 +340,7 @@ export class Many2XAutocomplete extends Component {
             });
         }
 
-        if (!records.length && !this.activeActions.create) {
+        if (!records.length && !this.activeActions.createEdit && !this.props.quickCreate) {
             options.push({
                 label: _t("No records"),
                 classList: "o_m2o_no_result",
@@ -533,14 +533,16 @@ export class X2ManyFieldDialog extends Component {
 
         this.canCreate = !this.record.resId;
 
-        if (this.archInfo.xmlDoc.querySelector("footer")) {
+        if (this.archInfo.xmlDoc.querySelector("footer:not(field footer)")) {
             this.footerArchInfo = Object.assign({}, this.archInfo);
             this.footerArchInfo.xmlDoc = createElement("t");
             this.footerArchInfo.xmlDoc.append(
-                ...[...this.archInfo.xmlDoc.querySelectorAll("footer")]
+                ...[...this.archInfo.xmlDoc.querySelectorAll("footer:not(field footer)")]
             );
             this.footerArchInfo.arch = this.footerArchInfo.xmlDoc.outerHTML;
-            [...this.archInfo.xmlDoc.querySelectorAll("footer")].forEach((x) => x.remove());
+            [...this.archInfo.xmlDoc.querySelectorAll("footer:not(field footer)")].forEach((x) =>
+                x.remove()
+            );
             this.archInfo.arch = this.archInfo.xmlDoc.outerHTML;
         }
 

@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 
-from odoo import _, api, fields, models, modules, tools
+from odoo import _, api, Command, fields, models, modules, tools
 from odoo.tools import email_normalize
 
 
@@ -53,11 +53,9 @@ class Users(models.Model):
 
     def _inverse_notification_type(self):
         inbox_group = self.env.ref('mail.group_mail_notification_type_inbox')
-        for user in self:
-            if user.notification_type == 'inbox':
-                user.groups_id += inbox_group
-            else:
-                user.groups_id -= inbox_group
+        inbox_users = self.filtered(lambda user: user.notification_type == 'inbox')
+        inbox_users.write({"groups_id": [Command.link(inbox_group.id)]})
+        (self - inbox_users).write({"groups_id": [Command.unlink(inbox_group.id)]})
 
     # ------------------------------------------------------------
     # CRUD
@@ -254,6 +252,7 @@ class Users(models.Model):
         self.ensure_one()
         odoobot = self.env.ref('base.partner_root')
         values = {
+            'action_discuss_id': self.env["ir.model.data"]._xmlid_to_res_id("mail.action_discuss"),
             'companyName': self.env.company.name,
             'currentGuest': False,
             'current_partner': self.partner_id.mail_partner_format().get(self.partner_id),

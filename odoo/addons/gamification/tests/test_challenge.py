@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 import datetime
-
 from freezegun import freeze_time
 
-from odoo.addons.base.tests.common import TransactionCaseWithUserDemo
+from odoo.addons.gamification.tests.common import TransactionCaseGamification
 from odoo.exceptions import UserError
 from odoo.tools import mute_logger
 
 
-class TestGamificationCommon(TransactionCaseWithUserDemo):
+class TestGamificationCommon(TransactionCaseGamification):
 
     def setUp(self):
         super(TestGamificationCommon, self).setUp()
@@ -150,6 +149,39 @@ class test_challenge(TestGamificationCommon):
         self.assertEqual(
             portal_last_active_old | internal_last_active_old,
             unchanged_goal_ids.user_id,
+        )
+
+    def test_30_create_challenge_with_sum_goal(self):
+        challenge = self.env['gamification.challenge'].create({
+            'name': 'test',
+            'state': 'draft',
+            'user_domain': '[("active", "=", True)]', #Include all active users to get a least one participant
+            'reward_id': 1,
+        })
+
+        model = self.env['ir.model'].search([('model', '=', 'gamification.badge')])[0]
+        field = self.env['ir.model.fields'].search([('model', '=', 'gamification.badge'), ('name', '=', 'rule_max_number')])[0]
+
+        sum_goal = self.env['gamification.goal.definition'].create({
+            'name': 'test',
+            'computation_mode': 'sum',
+            'model_id': model.id,
+            'field_id': field.id
+        })
+
+        self.env['gamification.challenge.line'].create({
+            'challenge_id': challenge.id,
+            'definition_id': sum_goal.id,
+            'condition': 'higher',
+            'target_goal': 1
+        })
+
+        challenge.action_start()
+
+        self.assertEqual(
+            challenge.state,
+            'inprogress',
+            "Challenge failed to start",
         )
 
 
